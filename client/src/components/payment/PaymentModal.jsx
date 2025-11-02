@@ -7,7 +7,7 @@ import PaymentLoadingSpinner from './PaymentLoadingSpinner';
 import PaymentSuccessModal from './PaymentSuccessModal';
 import PaymentErrorModal from './PaymentErrorModal';
 import { CloseIcon, LockIcon } from '../../utils/iconUtils';
-import razorpayService from '../../services/razorpayService';
+import paymentService from '../../services/paymentService';
 
 const PaymentModal = ({ 
   isOpen, 

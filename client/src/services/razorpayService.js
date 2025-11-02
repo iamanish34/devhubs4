@@ -235,6 +235,38 @@ class RazorpayService {
    */
   async processPayment(paymentData, callbacks = {}) {
     try {
+      // If mock mode is enabled, simulate payment flow and return a fake success result
+      const MOCK_RAZORPAY = (import.meta.env.VITE_MOCK_RAZORPAY || 'false') === 'true';
+      if (MOCK_RAZORPAY) {
+        console.log('⚠️ Mock Razorpay enabled - simulating payment for', paymentData);
+
+        // Simulate creating an order (structure similar to backend)
+        const fakeOrderId = `mock_order_${Date.now()}`;
+        const orderData = { data: { order: { order_id: fakeOrderId, amount: Math.round((paymentData.amount || 0) * 100) } } };
+
+        // Small delay to mimic network latency
+        await new Promise((res) => setTimeout(res, 200));
+
+        // Simulated verification result (normally done on backend)
+        const simulatedResult = {
+          ...paymentData,
+          status: 'success',
+          orderId: fakeOrderId,
+          paymentId: `mock_pay_${Date.now()}`,
+          signature: 'mock_signature',
+          createdAt: new Date().toISOString()
+        };
+
+        // Call success callback if provided
+        if (callbacks.onSuccess) {
+          try { callbacks.onSuccess(simulatedResult); } catch (err) { console.error('Mock onSuccess callback error', err); }
+        }
+
+        // Return a resolved promise with the simulated order data so callers expecting a Razorpay instance
+        // still receive a truthy value (but not a real Razorpay object).
+        return { mock: true, orderData };
+      }
+
       // Create payment order
       const orderData = await this.createPaymentOrder(paymentData);
       

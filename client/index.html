@@ -12,23 +12,19 @@
       If you use a CSP, make sure razorpay domains are allowed.
       Adjust other directives (img-src, connect-src, frame-src) to your app needs.
     -->
-    <!--
     <meta http-equiv="Content-Security-Policy"
-      content="
-        default-src 'self';
-        script-src 'self' https://checkout.razorpay.com 'unsafe-inline' 'unsafe-eval';
-        connect-src 'self' https://*.razorpay.com;
-        img-src 'self' data: https://*.razorpay.com;
-        frame-src https://*.razorpay.com;
-        style-src 'self' 'unsafe-inline';
-        font-src 'self' data:;
-      ">
-    -->
+      content="default-src * 'unsafe-inline' 'unsafe-eval' blob:; 
+               script-src * 'unsafe-inline' 'unsafe-eval' blob:;
+               connect-src * 'unsafe-inline';
+               img-src * data: blob: 'unsafe-inline';
+               frame-src *;
+               style-src * 'unsafe-inline';">
 
     <title>DevHubs</title>
 
     <!-- Razorpay Checkout SDK -->
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="https://checkout.razorpay.com/v1/checkout.js" 
+            crossorigin="anonymous"></script>
 
     <!--
       IMPORTANT:

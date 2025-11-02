@@ -202,7 +202,17 @@ const ListProject = async (req, res) => {
       bonusPool.status = 'funded';
       bonusPool.fundedAt = new Date();
       await bonusPool.save();
-      console.log(`[ProjectListing] Auto-funded bonus pool for testing: ${bonusPool._id}`);
+
+      // Update the project to link the bonus pool and mark bonus as funded
+      await ProjectListing.findByIdAndUpdate(project._id, {
+        $set: {
+          bonusPool: bonusPool._id,
+          'bonus.funded': true,
+          'bonus.razorpayOrderId': `mock_order_${Date.now()}`
+        }
+      });
+
+      console.log(`[ProjectListing] Updated project ${project._id} with funded bonus pool: ${bonusPool._id}`);
 
       responseData.bonusPool = {
         id: bonusPool._id,

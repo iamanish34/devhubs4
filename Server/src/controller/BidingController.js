@@ -122,45 +122,68 @@ export const createBid = async (req, res) => {
     console.log(`[Bid Creation] Eligibility check result:`, eligibility);
     console.log(`[Bid Creation] Fee calculation - bidFee: ₹${bidFee}, totalAmount: ₹${totalAmount}, reason: ${eligibility.reason}`);
 
-    // Create the bid record immediately with pending payment status
-    console.log(`[Bid Creation] Creating bid record with pending payment status`);
-    const newBid = new Bidding({
-      project_id: _id,
-      user_id: userID,
-      bid_amount: bid_amount,
-      bid_fee: bidFee,
-      total_amount: totalAmount,
-      year_of_experience,
-      bid_description,
-      hours_avilable_per_week,
-      skills,
-      bid_status: "Pending",
-      payment_status: "pending", // Will be updated to 'paid' when payment is successful
-      is_free_bid: eligibility.feeAmount === 0,
-      escrow_details: {
-        provider: 'razorpay'
+    if (eligibility.feeAmount === 0) {
+      // Free bid: create bid immediately
+      const newBid = new Bidding({
+        project_id: _id,
+        user_id: userID,
+        bid_amount: bid_amount,
+        bid_fee: bidFee,
+        total_amount: totalAmount,
+        year_of_experience,
+        bid_description,
+        hours_avilable_per_week,
+        skills,
+        bid_status: "Pending",
+        payment_status: "paid", // Free bid, mark as paid
+        is_free_bid: true,
+        escrow_details: {
+          provider: 'razorpay'
+        }
+      });
+      const savedBid = await newBid.save();
+      try {
+        // Decrement user's freeBids remaining and increment used
+        const User = await user.findById(userID);
+        if (User) {
+          if (!User.freeBids) User.freeBids = { remaining: 5, used: 0 };
+          User.freeBids.remaining = Math.max(0, (User.freeBids.remaining || 0) - 1);
+          User.freeBids.used = (User.freeBids.used || 0) + 1;
+          await User.save();
+          console.log(`[Bid Creation] Updated user freeBids: remaining=${User.freeBids.remaining}, used=${User.freeBids.used}`);
+        }
+      } catch (fbErr) {
+        console.error('[Bid Creation] Error updating user freeBids:', fbErr);
       }
-    });
+      res.status(201).json({
+        message: "Bid created successfully (free bid)",
+        paymentRequired: false,
+        bidInfo: {
+          bidId: savedBid._id,
+          originalAmount: bid_amount,
+          fee: 0,
+          totalAmount: bid_amount,
+          paymentType: 'free_bid',
+          feeAmount: 0
+        }
+      });
+      return;
+    }
 
-    // Save the bid record
-    const savedBid = await newBid.save();
-    console.log(`[Bid Creation] Bid record created successfully - bidId: ${savedBid._id}`);
-
-    // Create payment intent for the TOTAL amount (bid amount + fee if applicable)
+    // Paid bid: only create payment intent and Razorpay order, do NOT create bid yet
     const paymentIntent = await PaymentIntent.create({
       provider: 'razorpay',
       purpose: 'bid_fee',
-      amount: totalAmount, // Total amount including bid amount + fee (if any)
+      amount: totalAmount,
       userId: userID,
       projectId: _id,
       status: 'created',
-      notes: { 
-        bidId: savedBid._id.toString(), // Link to the created bid
+      notes: {
         bidAmount: bid_amount,
         bidFee: bidFee,
         totalAmount: totalAmount,
         feeAmount: eligibility.feeAmount,
-        feeWaived: eligibility.feeAmount === 0,
+        feeWaived: false,
         year_of_experience,
         bid_description,
         hours_avilable_per_week,
@@ -168,33 +191,23 @@ export const createBid = async (req, res) => {
       }
     });
 
-    // Create Razorpay order for the TOTAL amount
     const razorpayOrder = await rpCreateOrder({
       orderId: paymentIntent._id.toString(),
-      amount: totalAmount, // Total amount including bid amount + fee (if any)
-      customer: { 
-        customer_id: String(userID), 
-        customer_email: req.user.email, 
-        customer_phone: req.user.phone || '9999999999' 
+      amount: totalAmount,
+      customer: {
+        customer_id: String(userID),
+        customer_email: req.user.email,
+        customer_phone: req.user.phone || '9999999999'
       },
-      notes: eligibility.feeAmount === 0 ? 'Bid payment (no fee)' : 
-             eligibility.feeAmount === 3 ? 'Bid payment (bid amount + ₹3 fee)' : 
-             'Bid payment (bid amount + ₹9 fee)'
+      notes: 'Bid payment (bid amount + fee)'
     });
 
-    // Update payment intent with order ID
     paymentIntent.orderId = razorpayOrder.order_id;
     await paymentIntent.save();
 
-    // Update bid with payment intent reference
-    await Bidding.findByIdAndUpdate(savedBid._id, {
-      'escrow_details.payment_intent_id': paymentIntent._id.toString()
-    });
-
-    logPaymentEvent('bid_fee_created', {
+    logPaymentEvent('bid_fee_intent_created', {
       intentId: paymentIntent._id,
       orderId: razorpayOrder.order_id,
-      bidId: savedBid._id,
       userId: userID,
       projectId: _id,
       bidAmount: bid_amount,
@@ -203,25 +216,22 @@ export const createBid = async (req, res) => {
       feeAmount: eligibility.feeAmount
     });
 
-    // Return payment data for ALL bids (payment always required)
-    console.log(`[Bid Creation] Payment required for all bids - returning payment data`);
-    res.status(201).json({ 
-      message: "Bid created successfully. Payment required to activate bid.",
+    // Return payment data, do NOT create bid yet
+    res.status(201).json({
+      message: "Payment required to activate bid.",
       paymentRequired: true,
       paymentData: {
         provider: 'razorpay',
         order: razorpayOrder,
         intentId: paymentIntent._id,
-        amount: totalAmount // Total amount including bid amount + fee (if any)
+        amount: totalAmount
       },
       bidInfo: {
-        bidId: savedBid._id,
         originalAmount: bid_amount,
         fee: bidFee,
         totalAmount: totalAmount,
-        paymentType: eligibility.feeAmount === 0 ? 'free_bid' : 
-                    eligibility.feeAmount === 3 ? 'subscription_bid' : 'paid_bid',
-        feeAmount: eligibility.feeAmount
+        paymentType: 'paid_bid',
+        feeAmount: bidFee
       }
     });
 

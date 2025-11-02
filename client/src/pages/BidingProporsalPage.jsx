@@ -1,5 +1,6 @@
 /* eslint-disable no-unused-vars */
 import React, { useState, useEffect } from "react";
+import { useAuth } from '../context/AuthContext';
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import axios from "axios";
@@ -246,13 +247,22 @@ const BidingProporsalPage = () => {
       
       if (response.data.success) {
         console.log("Bid eligibility data:", response.data.data);
-        setBidEligibility(response.data.data.eligibility);
+        const data = response.data.data;
+        // Normalize into a single object so UI can access both eligibility and freeBids easily
+        setBidEligibility({
+          ...data.eligibility,
+          freeBids: data.freeBids || { remaining: 0, used: 0 },
+          bids: data.bids || {},
+          subscription: data.subscription || { isActive: false }
+        });
       }
     } catch (error) {
       console.error("Error fetching bid eligibility:", error);
       // Don't show error to user for background sync
     }
   };
+
+  const { refreshUser } = useAuth();
 
   useEffect(() => {
     fetchBidEligibility();
@@ -363,11 +373,10 @@ const BidingProporsalPage = () => {
     };
 
     try {
+      // Always call createBid endpoint first. Backend will either create the bid (free/subscription)
+      // or return paymentData (intent/order) for paid bids.
       const token = localStorage.getItem("token");
-      console.log("🚀 [handleSubmit] Token:", token);
-      if (!token) {
-        throw new Error("No token found. Please log in.");
-      }
+      if (!token) throw new Error("No token found. Please log in.");
 
       const response = await axios.post(
         `${import.meta.env.VITE_API_URL}/api/bid/createBid/${_id}`,
@@ -380,32 +389,23 @@ const BidingProporsalPage = () => {
         }
       );
 
-      console.log("Bid created successfully:", response.data);
-      
-      // Check if payment is required based on backend response
-      if (response.data.paymentRequired && response.data.paymentData) {
-        console.log("Payment required - showing payment modal");
-        // Show payment modal
-        setPaymentData(response.data.paymentData);
-        setShowPaymentModal(true);
-      } else {
-        console.log("No payment required - bid is free");
-        // No payment required (free bid or subscription)
-        const successMessage = `Bid submitted successfully!
-        
-Your Bid Details:
-• Original Bid: ₹${response.data.bidInfo.originalAmount}
-• Bidding Fee: ₹${response.data.bidInfo.fee}
-• Total Amount: ₹${response.data.bidInfo.totalAmount}
-• Payment Type: ${response.data.bidInfo.paymentType === 'free_bid' ? 'Free Bid' : response.data.bidInfo.paymentType === 'subscription' ? 'Subscription' : 'Paid Bid'}`;
+      console.log('createBid response:', response.data);
 
+      // If backend indicates payment required, show payment modal using returned paymentData
+      if (response.data.paymentRequired && response.data.paymentData) {
+        setPaymentData({
+          ...response.data.paymentData,
+          bidDetails: payload
+        });
+      } else {
+        // Bid created successfully (free or subscription)
+        const bidInfo = response.data.bidInfo || {};
+        const successMessage = `Bid submitted successfully!\n\nYour Bid Details:\n• Original Bid: ₹${bidInfo.originalAmount || bidAmount}\n• Bidding Fee: ₹${bidInfo.fee || 0}\n• Total Amount: ₹${bidInfo.totalAmount || bidAmount}\n• Payment Type: ${bidInfo.paymentType === 'free_bid' ? 'Free Bid' : bidInfo.paymentType === 'subscription' ? 'Subscription' : 'Paid Bid'}`;
         alert(successMessage);
-        
+        // Refresh user data so freeBids count and eligibility update immediately
+        try { await refreshUser(); } catch (e) { /* ignore */ }
         navigate(`/bidingPage/${_id}`, { 
-          state: { 
-            success: true, 
-            message: "Bid submitted successfully!" 
-          } 
+          state: { success: true, message: "Bid submitted successfully!" } 
         });
       }
     } catch (error) {
@@ -418,117 +418,33 @@ Your Bid Details:
 
   const handlePaymentSuccess = async (result) => {
     setShowPaymentModal(false);
-    
     try {
-      console.log("Payment successful, bid will be created automatically via webhook");
-      
-      // Wait a moment for webhook to process
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Check if payment was processed successfully
-      if (paymentData?.order?.order_id) {
-        try {
-          const token = localStorage.getItem("token");
-          const checkResponse = await axios.get(
-            `${import.meta.env.VITE_API_URL}/webhooks/check-payment/${paymentData.order.order_id}`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`,
-              },
-            }
-          );
-          
-          console.log("Payment status check result:", checkResponse.data);
-          
-          if (checkResponse.data.bidStatus === 'paid') {
-            // Refresh bid eligibility data after successful payment
-            await fetchBidEligibility();
-            
-            const successMessage = `Payment successful! Your bid has been submitted and activated.
-            
-Your Bid Details:
-• Original Bid: ₹${bidAmount}
-• Bidding Fee: ₹${getBidFee()}
-• Total Amount: ₹${bidAmount + getBidFee()}
-• Payment Type: ${isFreeBid() ? 'Free Bid' : hasActiveSubscription() ? 'Subscription Bid' : 'Paid Bid'}
+      // Verify payment with backend which will create/activate the bid
+      const token = localStorage.getItem('token');
+      if (!token) throw new Error('No token found. Please log in.');
 
-Your bid is now visible to the project owner.`;
+      const orderId = result?.razorpay_order_id || paymentData?.order?.order_id || paymentData?.order_id;
+      if (!orderId) throw new Error('Order ID not available for verification');
 
-            alert(successMessage);
-            navigate(`/bidingPage/${_id}`, { 
-              state: { 
-                success: true, 
-                message: "Payment successful! Bid submitted and activated." 
-              } 
-            });
-          } else {
-            // Payment successful but bid not yet activated
-            // Refresh bid eligibility data even if bid is pending
-            await fetchBidEligibility();
-            
-            const pendingMessage = `Payment successful! Your bid is being processed.
-            
-Your Bid Details:
-• Original Bid: ₹${bidAmount}
-• Bidding Fee: ₹${getBidFee()}
-• Total Amount: ₹${bidAmount + getBidFee()}
-• Payment Type: ${isFreeBid() ? 'Free Bid' : hasActiveSubscription() ? 'Subscription Bid' : 'Paid Bid'}
+      const verifyResponse = await axios.get(
+        `${import.meta.env.VITE_API_URL}/api/payments/verify-razorpay/${orderId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
 
-Your bid will be activated shortly. If you don't see it within a few minutes, please contact support.`;
-
-            alert(pendingMessage);
-            navigate(`/bidingPage/${_id}`, { 
-              state: { 
-                success: true, 
-                message: "Payment successful! Bid is being processed." 
-              } 
-            });
-          }
-        } catch (checkError) {
-          console.error("Error checking payment status:", checkError);
-          // Fallback to original success message
-          const successMessage = `Payment successful! Your bid has been submitted.
-          
-Your Bid Details:
-• Original Bid: ₹${bidAmount}
-• Bidding Fee: ₹${getBidFee()}
-• Total Amount: ₹${bidAmount + getBidFee()}
-• Payment Type: ${isFreeBid() ? 'Free Bid' : hasActiveSubscription() ? 'Subscription Bid' : 'Paid Bid'}
-
-Your bid will be visible to the project owner shortly.`;
-
-          alert(successMessage);
-          navigate(`/bidingPage/${_id}`, { 
-            state: { 
-              success: true, 
-              message: "Payment successful! Bid submitted." 
-            } 
-          });
-        }
-      } else {
-        // No order ID available, use fallback message
-        const successMessage = `Payment successful! Your bid has been submitted.
-        
-Your Bid Details:
-• Original Bid: ₹${bidAmount}
-• Bidding Fee: ₹${getBidFee()}
-• Total Amount: ₹${bidAmount + getBidFee()}
-• Payment Type: ${isFreeBid() ? 'Free Bid' : hasActiveSubscription() ? 'Subscription Bid' : 'Paid Bid'}
-
-Your bid will be visible to the project owner shortly.`;
-
+      if (verifyResponse.data && verifyResponse.data.success) {
+        // Bid should be created/activated by backend during verification
+        const successMessage = `Payment successful! Your bid has been submitted and activated.\n\nYour Bid Details:\n• Original Bid: ₹${bidAmount}\n• Bidding Fee: ₹${getBidFee()}\n• Total Amount: ₹${bidAmount + getBidFee()}\n\nYour bid is now visible to the project owner.`;
         alert(successMessage);
-        navigate(`/bidingPage/${_id}`, { 
-          state: { 
-            success: true, 
-            message: "Payment successful! Bid submitted." 
-          } 
-        });
+        // Refresh user details (free bids / subscription) and then navigate
+        try { await refreshUser(); } catch (e) { /* ignore */ }
+        navigate(`/bidingPage/${_id}`, { state: { success: true, message: 'Payment successful! Bid submitted and activated.' } });
+      } else {
+        console.warn('Payment verification did not return success, response:', verifyResponse.data);
+        setError('Payment completed but verification failed. Please contact support.');
       }
-      
     } catch (error) {
-      console.error("Error handling payment success:", error);
-      setError("Payment successful but there was an issue. Please contact support.");
+      console.error('Error handling payment success:', error);
+      setError(error.response?.data?.message || 'Payment successful but there was an issue. Please contact support.');
     }
   };
 

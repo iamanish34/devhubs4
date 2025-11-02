@@ -1,7 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import { FaGithub, FaUser, FaEnvelope, FaLock, FaCode, FaLaptopCode, FaGraduationCap } from "react-icons/fa";
 import { useState } from "react";
-import axios from "axios";
+import axiosInstance from "../Config/axiosConfig";
 import { useAuth } from "../context/AuthContext";
 import { auth, githubProvider, signInWithPopup } from "../Config/firebase";
 
@@ -29,19 +29,16 @@ const CreateAccount = () => {
     setError(null);
     setSuccess(false);
 
-    const Acoount_Creation_API = `${import.meta.env.VITE_ACCOUNT_CREATION_API}`;
+
 
     try {
-      const response = await axios.post(
-        Acoount_Creation_API,
+      const response = await axiosInstance.post(
+        '/api/user',
         {
           username: formData.username,
           email: formData.email,
           password: formData.password,
           usertype: formData.usertype,
-        },
-        {
-          withCredentials: true,
         }
       );
       setSuccess(true);

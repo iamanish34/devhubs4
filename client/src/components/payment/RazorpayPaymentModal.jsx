@@ -1,124 +1,148 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { AnimatePresence } from "framer-motion";
 import { CloseIcon, LockIcon } from "../../utils/iconUtils";
+
+const loadRazorpayScript = () => {
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+};
 
 const RazorpayPaymentModal = ({ isOpen, onClose, paymentData, onSuccess, onError }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [ready, setReady] = useState(false);
 
-  const containerRef = useRef(null);
-  const razorpayRef = useRef(null);
-  const initializedRef = useRef(false);
+  const MOCK_RAZORPAY = (import.meta.env.VITE_MOCK_RAZORPAY || 'false') === 'true';
+
+  const simulateSuccess = () => {
+    // Create a mock payment response
+    const mockResponse = {
+      razorpay_payment_id: 'mock_pay_' + Date.now(),
+      razorpay_order_id: paymentData?.order?.order_id || paymentData?.order_id || 'mock_order_' + Date.now(),
+      razorpay_signature: 'mock_sign_' + Date.now()
+    };
+    onSuccess?.(mockResponse);
+  };
+
+  const simulateFailure = () => {
+    const fakeError = { code: 'MOCK_FAILED', description: 'Simulated payment failure' };
+    onError?.(fakeError);
+  };
 
   useEffect(() => {
-    if (isOpen && paymentData && !initializedRef.current) {
-      initializedRef.current = true;
-      initializePayment();
-    }
-    return () => {
-      try {
-        if (razorpayRef.current) {
-          razorpayRef.current.close();
-        }
-      } catch {
-        // Ignore unmount errors
+    let mounted = true;
+
+    const startRazorpayPayment = async () => {
+      if (!isOpen) return;
+      setLoading(true);
+      setError("");
+
+      const MOCK_RAZORPAY = (import.meta.env.VITE_MOCK_RAZORPAY || 'false') === 'true';
+      // In mock mode we do NOT auto-complete the payment to avoid accidental bid creation.
+      // Instead we present explicit buttons in the modal UI to simulate success/failure.
+      if (MOCK_RAZORPAY) {
+        // Let the modal render and show simulation controls. Do not auto-close or call onSuccess here.
+        setLoading(false);
+        return;
       }
-      if (containerRef.current) containerRef.current.innerHTML = "";
-      initializedRef.current = false;
-      setReady(false);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, paymentData]);
 
-  const initializePayment = async () => {
-    setLoading(true);
-    setError("");
-
-    // Use environment variable or fallback to test key for development
-    let keyId = import.meta.env.VITE_RAZORPAY_KEY_ID;
-    const mode = (import.meta.env.VITE_RAZORPAY_MODE || "test").toLowerCase();
-
-    // Fallback to test key for development if not configured
-    if (!keyId || keyId === "rzp_test_xxxxxxxxxx") {
-      keyId = "rzp_test_1DP5mmOlF5G5ag"; // Public test key for development
-      console.warn("⚠️ Using fallback test key. For production, configure VITE_RAZORPAY_KEY_ID in .env file");
-    }
-
-    try {
-      if (typeof window === "undefined" || typeof window.Razorpay === "undefined")
-        throw new Error("Razorpay SDK not loaded");
-
-      const order = paymentData?.order || {};
-      const orderId = order.order_id || order.payment_session_id || null;
-      if (!orderId) throw new Error("Missing order ID");
-
-      console.log("🔧 Initializing Razorpay SDK with mode:", mode);
-
-      // Create Razorpay options
-      const options = {
-        key: keyId,
-        amount: Math.round(paymentData?.amount * 100), // Convert to paise
-        currency: "INR",
-        name: "DeveloperProduct",
-        description: "Payment for " + (paymentData?.purpose || "service"),
-        order_id: orderId,
-        handler: function (response) {
-          console.log("✅ Payment success:", response);
-          onSuccess?.(response);
-        },
-        prefill: {
-          name: localStorage.getItem("username") || "User",
-          email: localStorage.getItem("email") || order.customer_details?.customer_email || "user@example.com",
-          contact: localStorage.getItem("phone") || order.customer_details?.customer_phone || "9999999999"
-        },
-        notes: {
-          orderId: orderId,
-          purpose: paymentData?.purpose || "payment"
-        },
-        theme: {
-          color: "#3b82f6"
-        },
-        modal: {
-          ondismiss: function() {
-            console.log("🔒 Payment modal dismissed");
-            onClose?.();
-          }
+      try {
+        // Check if we're using mock payments
+        if (MOCK_RAZORPAY) {
+          // Simulate success after 1 second to mimic real payment flow
+          setTimeout(() => {
+            simulateSuccess();
+          }, 1000);
+          return;
         }
-      };
+        
+        // Load Razorpay SDK for real payments
+        if (!window.Razorpay) {
+          const isLoaded = await loadRazorpayScript();
+          if (!isLoaded) throw new Error('Failed to load Razorpay script');
+        }
 
-      // Create Razorpay instance
-      const razorpay = new window.Razorpay(options);
-      razorpayRef.current = razorpay;
+        // If backend already provided an order (from createBid), use it. Otherwise create an order using payments API.
+        let order = paymentData?.order;
+        if (!order) {
+          const token = localStorage.getItem('token');
+          const response = await fetch(`${import.meta.env.VITE_API_URL}/api/payments/bid-fee`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              amount: paymentData?.amount,
+              purpose: paymentData?.purpose || 'bid_fee',
+              projectId: paymentData?.projectId,
+              bidId: paymentData?.bidId
+            })
+          });
+          if (!response.ok) throw new Error('Failed to create payment order');
+          const orderJson = await response.json();
+          order = orderJson.data?.order || orderJson.order;
+        }
 
-      console.log("🔧 Razorpay instance created:", razorpay);
+        // Setup Razorpay options
+        const options = {
+          key: import.meta.env.VITE_RAZORPAY_KEY_ID,
+          amount: order?.amount,
+          currency: 'INR',
+          name: 'DevHubs',
+          description: paymentData?.description || 'Bid Fee Payment',
+          order_id: order?.order_id || order?.id,
+          handler: function (response) {
+            if (!mounted) return;
+            onSuccess?.({
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_signature: response.razorpay_signature
+            });
+            setLoading(false);
+          },
+          prefill: {
+            email: '',
+            contact: ''
+          },
+          theme: {
+            color: '#00A8E8'
+          }
+        };
 
-      // Open the payment modal
-      razorpay.open();
-      setReady(true);
+        const rzp = new window.Razorpay(options);
+        rzp.on('payment.failed', function (response) {
+          if (!mounted) return;
+          setError('Payment failed. Please try again.');
+          setLoading(false);
+          onError?.(response.error);
+        });
+        rzp.open();
+        setLoading(false);
+      } catch (err) {
+        if (mounted) {
+          setError(err?.message || 'An error occurred while initializing payment');
+          setLoading(false);
+          onError?.(err);
+        }
+      }
+    };
 
-    } catch (err) {
-      console.error("Payment init error:", err);
-      setError(err.message || "Payment failed. Please try again.");
-      onError?.(err.message || "Payment failed. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
+    if (isOpen) startRazorpayPayment();
+    return () => { mounted = false; };
+  }, [isOpen, paymentData, onSuccess, onError]);
 
   if (!isOpen) return null;
 
   return (
     <AnimatePresence>
-      <div
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-        onClick={onClose}
-      >
-        <div
-          className="bg-[#1a1a1a] rounded-xl p-6 w-full max-w-md border border-blue-500/30"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Header */}
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+        <div className="bg-[#1a1a1a] rounded-xl p-6 w-full max-w-md border border-blue-500/30" onClick={(e) => e.stopPropagation()}>
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold text-white">Complete Payment</h2>
             <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
@@ -126,7 +150,6 @@ const RazorpayPaymentModal = ({ isOpen, onClose, paymentData, onSuccess, onError
             </button>
           </div>
 
-          {/* Payment Info */}
           <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-4 mb-4">
             <div className="flex items-center text-blue-300 mb-2">
               <LockIcon className="w-4 h-4 mr-2" />
@@ -138,7 +161,7 @@ const RazorpayPaymentModal = ({ isOpen, onClose, paymentData, onSuccess, onError
                 <span>₹{paymentData?.amount || 0}</span>
               </div>
               <div className="text-xs text-gray-400">
-                {paymentData?.purpose === 'bonus_funding' 
+                {paymentData?.purpose === 'bonus_funding'
                   ? 'Bonus pool funding payment'
                   : paymentData?.purpose === 'bid_fee'
                   ? 'Includes bid amount + ₹9 fee'
@@ -148,7 +171,6 @@ const RazorpayPaymentModal = ({ isOpen, onClose, paymentData, onSuccess, onError
             </div>
           </div>
 
-          {/* Loading */}
           {loading && (
             <div className="text-center py-8">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
@@ -160,7 +182,17 @@ const RazorpayPaymentModal = ({ isOpen, onClose, paymentData, onSuccess, onError
             </div>
           )}
 
-          {/* Error */}
+          {/* Mock controls: explicit simulate buttons (only shown when MOCK_RAZORPAY is enabled) */}
+          {MOCK_RAZORPAY && !loading && (
+            <div className="py-4 flex flex-col items-center gap-3">
+              <p className="text-sm text-yellow-300">Mock payment mode is ON. Use the buttons below to simulate payment outcome.</p>
+              <div className="flex gap-3">
+                <button onClick={simulateSuccess} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md">Simulate Success</button>
+                <button onClick={simulateFailure} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md">Simulate Failure</button>
+              </div>
+            </div>
+          )}
+
           {error && (
             <div className="bg-red-900/20 border border-red-500/30 rounded-lg p-4 mb-4">
               <p className="text-red-300 text-sm">{error}</p>
@@ -179,23 +211,9 @@ const RazorpayPaymentModal = ({ isOpen, onClose, paymentData, onSuccess, onError
             </div>
           )}
 
-          {/* Container for Elements */}
-          <div id="razorpay-payment-container" ref={containerRef} className="min-h-[300px]" />
-
-          {/* Pay Now button (only when Elements is active) */}
-          {ready && !loading && (
-            <button
-              onClick={() => razorpayRef.current?.open()}
-              className="mt-4 w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Pay Now
-            </button>
-          )}
-
+          <div id="razorpay-payment-container" className="min-h-[80px]" />
           <div className="mt-4 text-center">
-            <p className="text-xs text-gray-400">
-              Your payment is secured by Razorpay's encryption
-            </p>
+            <p className="text-xs text-gray-400">Your payment is secured by Razorpay's encryption</p>
           </div>
         </div>
       </div>

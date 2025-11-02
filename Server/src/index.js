@@ -72,22 +72,38 @@ app.use(cookieParser());
 const CorsOption = {
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
+    if (!origin) {
+      console.log('🔓 Allowing request with no origin');
+      return callback(null, true);
+    }
     
     const allowedOrigins = [
       'https://devhubs.in',
       'https://www.devhubs.in',
       'http://localhost:5173',
-      'http://localhost:3000'
+      'http://localhost:3000',
+      'http://localhost:5000'
     ];
     
+    console.log(`🔒 Checking CORS for origin: ${origin}`);
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log('🔓 Development mode: allowing all origins');
+      return callback(null, true);
+    }
+    
     if (allowedOrigins.indexOf(origin) !== -1) {
+      console.log(`✅ Origin ${origin} is allowed`);
       callback(null, true);
     } else {
+      console.log(`❌ Origin ${origin} is not allowed`);
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range']
 }
   console.log("Frontend_Uri: " + process.env.CLIENT_URL);
   console.log("All Environment Variables:");
@@ -100,7 +116,10 @@ const CorsOption = {
     'http://localhost:5173',
     'http://localhost:3000'
   ]);
-app.use(cors(CorsOption)) ;
+app.use(cors(CorsOption));
+
+// Add OPTIONS handler for CORS pre-flight requests
+app.options('*', cors(CorsOption));
 
 // Request logging middleware
 app.use((req, res, next) => {

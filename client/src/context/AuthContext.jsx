@@ -31,6 +31,13 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Expose a refresh function to update user state on demand
+  const refreshUser = async () => {
+    setLoading(true);
+    await fetchUser();
+    setLoading(false);
+  };
+
   // Auto-fetch user on page load
   useEffect(() => {
     fetchUser();
@@ -108,7 +115,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loginUser, logoutUser, loading }}>
+    <AuthContext.Provider value={{ user, loginUser, logoutUser, loading, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

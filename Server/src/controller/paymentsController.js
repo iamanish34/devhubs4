@@ -1179,7 +1179,21 @@ export const verifyPaymentWithRazorpay = async (req, res) => {
     const { orderId } = req.params;
     const userId = req.user._id;
     
-    console.log(`[Payment Verification] Verifying payment with Razorpay for orderId: ${orderId}, userId: ${userId}`);
+    console.log(`[Payment Verification] Processing payment verification for orderId: ${orderId}, userId: ${userId}`);
+    
+    // Check if using mock payments
+    if (process.env.MOCK_PAYMENTS === 'true') {
+      // Auto-approve mock payments
+      return res.status(200).json({
+        success: true,
+        data: {
+          verified: true,
+          orderId: orderId,
+          paymentId: `mock_pay_${Date.now()}`,
+          status: 'paid'
+        }
+      });
+    }
     
     // Find payment intent by orderId
     const intent = await PaymentIntent.findOne({
@@ -1345,9 +1359,36 @@ export const verifyPaymentWithRazorpay = async (req, res) => {
             break;
             
           case 'bid_fee':
-            // Update bid status if it's a bid fee payment
-            const bidId = intent.notes?.bidId;
-            if (bidId) {
+            // If bid does not exist, create it now
+            let bidId = intent.notes?.bidId;
+            if (!bidId) {
+              // Create bid record from payment intent notes
+              const newBid = new Bidding({
+                project_id: intent.projectId,
+                user_id: intent.userId,
+                bid_amount: intent.notes?.bidAmount,
+                bid_fee: intent.notes?.bidFee,
+                total_amount: intent.notes?.totalAmount,
+                year_of_experience: intent.notes?.year_of_experience,
+                bid_description: intent.notes?.bid_description,
+                hours_avilable_per_week: intent.notes?.hours_avilable_per_week,
+                skills: intent.notes?.skills,
+                bid_status: "Pending",
+                payment_status: "paid",
+                is_free_bid: false,
+                escrow_details: {
+                  provider: 'razorpay',
+                  payment_intent_id: intent._id.toString(),
+                  locked_at: new Date()
+                }
+              });
+              const savedBid = await newBid.save();
+              bidId = savedBid._id;
+              // Update payment intent with bidId
+              intent.notes.bidId = bidId.toString();
+              await intent.save();
+            } else {
+              // Update bid status if it exists
               await Bidding.findByIdAndUpdate(bidId, {
                 payment_status: 'paid',
                 'escrow_details.payment_intent_id': intent._id.toString(),
