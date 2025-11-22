@@ -101,7 +101,8 @@ class RazorpayService {
 
     const options = {
       key: import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_1DP5mmOlF5G5ag',
-      amount: Math.round(paymentData.amount * 100), // Convert to paise
+      // Remove amount field - Razorpay uses order's amount when order_id is present
+      // Passing amount separately causes 400 errors if there's any mismatch
       currency: 'INR',
       name: 'DeveloperProduct',
       description: this.getPaymentDescription(paymentData.type),
@@ -135,10 +136,24 @@ class RazorpayService {
       }
     };
 
-    const razorpay = new window.Razorpay(options);
-    razorpay.open();
-
-    return razorpay;
+    // Initialize Razorpay with error handling
+    try {
+      const razorpay = new window.Razorpay(options);
+      
+      // Add error handler for payment failures
+      razorpay.on('payment.failed', function (response) {
+        console.error('Razorpay payment failed:', response);
+        if (callbacks.onError) {
+          callbacks.onError(response.error);
+        }
+      });
+      
+      razorpay.open();
+      return razorpay;
+    } catch (error) {
+      console.error('Failed to initialize Razorpay:', error);
+      throw new Error(`Failed to initialize payment: ${error.message}`);
+    }
   }
 
   /**
