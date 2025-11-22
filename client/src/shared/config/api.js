@@ -4,8 +4,15 @@ import { logger } from '../utils/logger';
 // API Configuration with validation
 // In production, fail if required env vars are missing
 const isProduction = import.meta.env.MODE === 'production';
-const API_BASE_URL = getEnvVar('VITE_API_URL', isProduction ? null : 'http://localhost:5001');
-const SOCKET_SERVER_URL = getEnvVar('VITE_SOCKET_SERVER', isProduction ? null : 'http://localhost:5001');
+
+// Helper function to normalize URLs (remove trailing slashes)
+const normalizeUrl = (url) => {
+  if (!url) return url;
+  return url.toString().replace(/\/+$/, ''); // Remove trailing slashes
+};
+
+const API_BASE_URL = normalizeUrl(getEnvVar('VITE_API_URL', isProduction ? null : 'http://localhost:5001'));
+const SOCKET_SERVER_URL = normalizeUrl(getEnvVar('VITE_SOCKET_SERVER', isProduction ? null : 'http://localhost:5001'));
 
 if (isProduction && (!API_BASE_URL || !SOCKET_SERVER_URL)) {
   throw new Error('VITE_API_URL and VITE_SOCKET_SERVER are required in production');
