@@ -257,16 +257,34 @@ export const realTimeMonitoring = {
       }
     }).observe({ entryTypes: ['largest-contentful-paint'] });
     
-    // First Input Delay
-    new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        if (entry.processingStart - entry.startTime > 100) {
-          userInteraction.trackPerformanceIssue('slow_fid', {
-            fid: entry.processingStart - entry.startTime
+    // First Input Delay - Skip deprecated first-input API to avoid console warnings
+    // Note: first-input is deprecated, using alternative measurement methods
+    // We'll measure FID through event listeners instead if needed
+    if (typeof PerformanceObserver !== 'undefined') {
+      try {
+        // Check if the entry type is supported before using it
+        const supportedTypes = PerformanceObserver.supportedEntryTypes || [];
+        if (supportedTypes.includes('first-input')) {
+          // Only use if explicitly supported (some browsers still support it)
+          const fidObserver = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+              if (entry.processingStart && entry.startTime) {
+                const fid = entry.processingStart - entry.startTime;
+                if (fid > 100) {
+                  userInteraction.trackPerformanceIssue('slow_fid', {
+                    fid: fid
+                  });
+                }
+              }
+            }
           });
+          fidObserver.observe({ entryTypes: ['first-input'] });
         }
+      } catch (err) {
+        // Silently fail if not supported
+        console.debug('First Input Delay monitoring not available');
       }
-    }).observe({ entryTypes: ['first-input'] });
+    }
     
     // Cumulative Layout Shift
     new PerformanceObserver((list) => {
