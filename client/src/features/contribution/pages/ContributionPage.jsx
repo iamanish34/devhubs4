@@ -47,7 +47,7 @@ import {
 } from "lucide-react";
 
 // Firebase imports for workspace access and real-time updates
-import { db } from "../Config/firebase";
+import { db } from "@shared/config/firebase";
 import {
   doc,
   getDoc,
