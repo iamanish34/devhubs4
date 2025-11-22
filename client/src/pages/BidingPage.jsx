@@ -1,6 +1,6 @@
 /* eslint-disable no-unused-vars */
 import Navbar from "@shared/components/layout/NavBar";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import axios from "axios";
 import { db } from "../Config/firebase";
@@ -12,6 +12,7 @@ import { LightbulbIcon } from "../utils/iconUtils";
 const BidingPage = () => {
   const { _id } = useParams();
   const { projectId } = useParams();
+  const location = useLocation();
   const [project, setProject] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -22,6 +23,7 @@ const BidingPage = () => {
   const [hasBid, setHasBid] = useState(null);
   const [savingProject, setSavingProject] = useState(false);
   const [bidEligibility, setBidEligibility] = useState(null);
+  const [successMessage, setSuccessMessage] = useState(null);
   
   // Payment context
   const { hasActiveSubscription } = usePayment();
@@ -80,7 +82,82 @@ const BidingPage = () => {
       }
     };
     checkUserStatus();
-  }, [_id]);
+  }, [_id, location.key]); // Add location.key to trigger refresh on navigation
+
+  // Handle success state from navigation (bid placed successfully)
+  useEffect(() => {
+    if (location.state?.success) {
+      // Store success message
+      setSuccessMessage(location.state.message || "Bid submitted successfully!");
+      
+      // Refetch bid status to update UI immediately
+      const refreshBidStatus = async () => {
+        try {
+          const token = localStorage.getItem("token");
+          if (!token) return;
+          
+          const bidRes = await axios.get(
+            `${import.meta.env.VITE_API_URL}/api/bid/getBid/${_id}`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            }
+          );
+          setHasBid(bidRes.data.existingBid || null);
+          setBidEligibility(bidRes.data.eligibility || null);
+        } catch (error) {
+          console.error("Error refreshing bid status:", error);
+        }
+      };
+      
+      refreshBidStatus();
+      
+      // Clear location state to prevent re-triggering
+      window.history.replaceState({}, document.title);
+      
+      // Clear success message after 5 seconds
+      setTimeout(() => {
+        setSuccessMessage(null);
+      }, 5000);
+    }
+  }, [location.state, _id]);
+
+  // Poll for bid status updates if bid is pending
+  useEffect(() => {
+    if (!hasBid || hasBid.bid_status !== "Pending") return;
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        const token = localStorage.getItem("token");
+        if (!token) return;
+        
+        const bidRes = await axios.get(
+          `${import.meta.env.VITE_API_URL}/api/bid/getBid/${_id}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        
+        if (bidRes.data.existingBid) {
+          const newStatus = bidRes.data.existingBid.bid_status;
+          if (newStatus !== hasBid.bid_status) {
+            setHasBid(bidRes.data.existingBid);
+            // Stop polling if status changed
+            if (newStatus !== "Pending") {
+              clearInterval(pollInterval);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error polling bid status:", error);
+      }
+    }, 30000); // Poll every 30 seconds
+    
+    return () => clearInterval(pollInterval);
+  }, [hasBid, _id]);
 
   // Fetch project data based on project ID
   useEffect(() => {
@@ -524,13 +601,23 @@ const BidingPage = () => {
               Your expertise in bug hunting can help shape this project. Join
               the team and earn rewards!
             </p>
+            
+            {/* Success message display */}
+            {successMessage && (
+              <div className="mb-4 p-4 bg-green-900/40 border border-green-500/30 rounded-lg text-green-300 text-center animate-pulse">
+                <div className="flex items-center justify-center">
+                  <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {successMessage}
+                </div>
+              </div>
+            )}
+            
             {hasBid && hasBid.bid_status === "Accepted" ? (
               <Link to={`/contributionPage/${_id}`}>
                 <button
                   className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-800 text-white text-lg rounded-lg hover:from-green-700 hover:to-green-900 transform hover:scale-105 transition-all duration-300 shadow-lg hover:shadow-green-500/30"
-                  onClick={() =>
-                    alert("You are now participating in this project!")
-                  }
                 >
                   Participate
                 </button>
@@ -543,33 +630,34 @@ const BidingPage = () => {
                 <br />
                 You can bid for the next project.
               </div>
+            ) : hasBid && hasBid.bid_status === "Pending" ? (
+              <div className="p-4 bg-yellow-900/40 border border-yellow-500/30 rounded-lg text-yellow-300 font-semibold text-center">
+                <div className="flex items-center justify-center mb-2">
+                  <svg className="w-5 h-5 mr-2 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Bid placed successfully!
+                </div>
+                <p className="text-sm mt-2">Waiting for project owner to review and select contributors.</p>
+              </div>
             ) : (
               <div>
-                {hasBid ? (
-                  <div className="p-4 bg-yellow-900/40 border border-yellow-500/30 rounded-lg text-yellow-300 font-semibold text-center">
-                    You already placed a bid for this project. Wait for the bid completion.
-                  </div>
-                ) : (
-                  <div>
-                    <button
-                      onClick={() => {
-                        // Direct redirect to bid proposal - no payment modal needed
-                        window.location.href = `/bidingproposal/${_id}`;
-                      }}
-                      className="px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-800 text-white text-lg rounded-lg hover:from-blue-700 hover:to-blue-900 transform hover:scale-105 transition-all duration-300 shadow-lg hover:shadow-blue-500/30"
-                    >
-                      {getBidButtonText()}
-                    </button>
-                    
-                    {/* Bid info notice */}
-                    <div className="mt-3 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
-                      <p className="text-blue-300 text-sm text-center flex items-center justify-center">
-                        <LightbulbIcon className="w-4 h-4 mr-2" />
-                        {getBidInfoText()}
-                      </p>
-                    </div>
-                  </div>
-                )}
+                <button
+                  onClick={() => {
+                    window.location.href = `/bidingproposal/${_id}`;
+                  }}
+                  className="px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-800 text-white text-lg rounded-lg hover:from-blue-700 hover:to-blue-900 transform hover:scale-105 transition-all duration-300 shadow-lg hover:shadow-blue-500/30"
+                >
+                  {getBidButtonText()}
+                </button>
+                
+                {/* Bid info notice */}
+                <div className="mt-3 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                  <p className="text-blue-300 text-sm text-center flex items-center justify-center">
+                    <LightbulbIcon className="w-4 h-4 mr-2" />
+                    {getBidInfoText()}
+                  </p>
+                </div>
               </div>
             )}
           </div>
