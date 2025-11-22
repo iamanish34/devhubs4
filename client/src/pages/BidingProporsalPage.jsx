@@ -397,6 +397,7 @@ const BidingProporsalPage = () => {
           ...response.data.paymentData,
           bidDetails: payload
         });
+        setShowPaymentModal(true); // Open payment modal
       } else {
         // Bid created successfully (free or subscription)
         const bidInfo = response.data.bidInfo || {};
